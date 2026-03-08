@@ -1,1 +1,30 @@
-{"cells": [{"cell_type": "code", "execution_count": 9, "id": "8c656780-c6d8-429a-bb93-d09d05ac7c88", "metadata": {}, "outputs": [{"name": "stderr", "output_type": "stream", "text": "                                                                                \r"}], "source": "from pyspark.sql import SparkSession\nfrom pyspark.sql.functions import when, input_file_name\n\nspark = SparkSession.builder.appName(\"Healthcare Claims Ingestion\") \\\n                            .getOrCreate()\n\nBUCKET_NAME = \"healthcare-bucket-07032026\"\nCLAIMS_BUCKET_PATH = f\"gs://{BUCKET_NAME}/landing/claims/*.csv\"\nBQ_TABLE = \"project-839560af-c436-4801-9dc.bronze_dataset.claims\"\nTEMP_GCS_BUCKET = f\"{BUCKET_NAME}/temp/\"\n\n# read from claims source\nclaims_df = spark.read.csv(CLAIMS_BUCKET_PATH, header=True)\n\n# adding hospital source for future reference\nclaims_df = (claims_df\n                .withColumn(\"datasource\", \n                              when(input_file_name().contains(\"hospital2\"), \"hosb\")\n                             .when(input_file_name().contains(\"hospital1\"), \"hosa\").otherwise(\"None\")))\n\n# dropping dupplicates if any\nclaims_df = claims_df.dropDuplicates()\n\n# write to bigquery\n(claims_df.write\n            .format(\"bigquery\")\n            .option(\"table\", BQ_TABLE)\n            .option(\"temporaryGcsBucket\", TEMP_GCS_BUCKET)\n            .mode(\"overwrite\")\n            .save())"}, {"cell_type": "code", "execution_count": null, "id": "2e3298bc-d20c-47ed-98b1-f2f7bacd6b76", "metadata": {}, "outputs": [], "source": ""}], "metadata": {"kernelspec": {"display_name": "PySpark", "language": "python", "name": "pyspark"}, "language_info": {"codemirror_mode": {"name": "ipython", "version": 3}, "file_extension": ".py", "mimetype": "text/x-python", "name": "python", "nbconvert_exporter": "python", "pygments_lexer": "ipython3", "version": "3.8.15"}}, "nbformat": 4, "nbformat_minor": 5}
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import when, input_file_name
+
+spark = SparkSession.builder.appName("Healthcare Claims Ingestion") \
+                            .getOrCreate()
+
+BUCKET_NAME = "healthcare-bucket-07032026"
+CLAIMS_BUCKET_PATH = f"gs://{BUCKET_NAME}/landing/claims/*.csv"
+BQ_TABLE = "project-839560af-c436-4801-9dc.bronze_dataset.claims"
+TEMP_GCS_BUCKET = f"{BUCKET_NAME}/temp/"
+
+# read from claims source
+claims_df = spark.read.csv(CLAIMS_BUCKET_PATH, header=True)
+
+# adding hospital source for future reference
+claims_df = (claims_df
+                .withColumn("datasource", 
+                              when(input_file_name().contains("hospital2"), "hosb")
+                             .when(input_file_name().contains("hospital1"), "hosa").otherwise("None")))
+
+# dropping dupplicates if any
+claims_df = claims_df.dropDuplicates()
+
+# write to bigquery
+(claims_df.write
+            .format("bigquery")
+            .option("table", BQ_TABLE)
+            .option("temporaryGcsBucket", TEMP_GCS_BUCKET)
+            .mode("overwrite")
+            .save())

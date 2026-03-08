@@ -1,1 +1,192 @@
-{"cells": [{"cell_type": "code", "execution_count": 6, "id": "25e9e811-51f8-43e3-a272-237330c91709", "metadata": {}, "outputs": [{"name": "stdout", "output_type": "stream", "text": "[2026-03-07T20:10:25.567501] INFO - \u2705 Successfully read the config file\n[2026-03-07T20:10:25.841547] INFO - No existing files for table encounters\n[2026-03-07T20:10:26.686657] INFO - Latest watermark for encounters: 1900-01-01 00:00:00\n[2026-03-07T20:10:27.082857] SUCCESS - \u2705 Successfully extracted data from encounters\n"}, {"name": "stderr", "output_type": "stream", "text": "                                                                                \r"}, {"name": "stdout", "output_type": "stream", "text": "[2026-03-07T20:10:30.033507] SUCCESS - \u2705 JSON file successfully written to gs://healthcare-bucket-07032026/landing/hospital-a/encounters/encounters_07032026.json\n"}, {"name": "stderr", "output_type": "stream", "text": "                                                                                \r"}, {"name": "stdout", "output_type": "stream", "text": "[2026-03-07T20:10:41.763855] SUCCESS - \u2705 Audit log updated for encounters\n[2026-03-07T20:10:41.789010] INFO - No existing files for table patients\n[2026-03-07T20:10:42.665786] INFO - Latest watermark for patients: 1900-01-01 00:00:00\n[2026-03-07T20:10:42.975197] SUCCESS - \u2705 Successfully extracted data from patients\n"}, {"name": "stderr", "output_type": "stream", "text": "                                                                                \r"}, {"name": "stdout", "output_type": "stream", "text": "[2026-03-07T20:10:44.235913] SUCCESS - \u2705 JSON file successfully written to gs://healthcare-bucket-07032026/landing/hospital-a/patients/patients_07032026.json\n"}, {"name": "stderr", "output_type": "stream", "text": "                                                                                \r"}, {"name": "stdout", "output_type": "stream", "text": "[2026-03-07T20:10:53.518281] SUCCESS - \u2705 Audit log updated for patients\n[2026-03-07T20:10:53.544543] INFO - No existing files for table transactions\n[2026-03-07T20:10:54.302534] INFO - Latest watermark for transactions: 1900-01-01 00:00:00\n[2026-03-07T20:10:54.606365] SUCCESS - \u2705 Successfully extracted data from transactions\n"}, {"name": "stderr", "output_type": "stream", "text": "                                                                                \r"}, {"name": "stdout", "output_type": "stream", "text": "[2026-03-07T20:10:56.591339] SUCCESS - \u2705 JSON file successfully written to gs://healthcare-bucket-07032026/landing/hospital-a/transactions/transactions_07032026.json\n"}, {"name": "stderr", "output_type": "stream", "text": "                                                                                \r"}, {"name": "stdout", "output_type": "stream", "text": "[2026-03-07T20:11:05.797404] SUCCESS - \u2705 Audit log updated for transactions\n[2026-03-07T20:11:05.832615] INFO - No existing files for table providers\n[2026-03-07T20:11:05.832665] INFO - Latest watermark for providers: None\n[2026-03-07T20:11:06.134257] SUCCESS - \u2705 Successfully extracted data from providers\n[2026-03-07T20:11:06.727465] SUCCESS - \u2705 JSON file successfully written to gs://healthcare-bucket-07032026/landing/hospital-a/providers/providers_07032026.json\n"}, {"name": "stderr", "output_type": "stream", "text": "                                                                                \r"}, {"name": "stdout", "output_type": "stream", "text": "[2026-03-07T20:11:14.398695] SUCCESS - \u2705 Audit log updated for providers\n[2026-03-07T20:11:14.428120] INFO - No existing files for table departments\n[2026-03-07T20:11:14.428171] INFO - Latest watermark for departments: None\n[2026-03-07T20:11:14.732337] SUCCESS - \u2705 Successfully extracted data from departments\n[2026-03-07T20:11:15.255246] SUCCESS - \u2705 JSON file successfully written to gs://healthcare-bucket-07032026/landing/hospital-a/departments/departments_07032026.json\n"}, {"name": "stderr", "output_type": "stream", "text": "                                                                                \r"}, {"name": "stdout", "output_type": "stream", "text": "[2026-03-07T20:11:35.035933] SUCCESS - \u2705 Audit log updated for departments\n\u2705 Logs successfully saved to GCS at gs://healthcare-bucket-07032026/temp/pipeline_logs/pipeline_log_20260307201135.json\n"}, {"name": "stderr", "output_type": "stream", "text": "                                                                                \r"}, {"name": "stdout", "output_type": "stream", "text": "\u2705 Logs stored in BigQuery for future analysis\n"}], "source": "from google.cloud import storage, bigquery\nimport pandas as pd\nfrom pyspark.sql import SparkSession\nimport datetime\nimport json\n\n# Initialize GCS & BigQuery Clients\nstorage_client = storage.Client()\nbq_client = bigquery.Client()\n\n#Initialize Spark Session\nspark = SparkSession.builder.appName(\"HospitalAMySQLToLanding\").getOrCreate()\n\n#Google Cloud Storage (GCS) Configuration (Moving Data From MySQL tables to GCS Landing Path)\nGCS_BUCKET = \"healthcare-bucket-07032026\"\nHOSPITAL_NAME = \"hospital-a\"   #Create Folder in GCS Landing Folder\nLANDING_PATH = f\"gs://{GCS_BUCKET}/landing/{HOSPITAL_NAME}\"\nARCHIVE_PATH = f\"gs://{GCS_BUCKET}/landing/{HOSPITAL_NAME}/archive/\"\nCONFIG_FILE_PATH = f\"gs://{GCS_BUCKET}/configs/load_config.csv\"\n\n#BigQuery Configuration\nBQ_PROJECT = \"project-839560af-c436-4801-9dc\"\nBQ_AUDIT_TABLE = f\"{BQ_PROJECT}.temp_dataset.audit_log\"\nBQ_LOG_TABLE = f\"{BQ_PROJECT}.temp_dataset.pipeline_logs\"\nBQ_TEMP_PATH = f\"{GCS_BUCKET}/temp/\"\n\n\n# MySQL Configuration\nMYSQL_CONFIG = {\n    \"url\": \"jdbc:mysql://34.41.176.141:3306/hospital-a-db\",\n    \"driver\": \"com.mysql.cj.jdbc.Driver\",\n    \"user\": \"myuser\",\n    \"password\": \"Root@12345\"\n}\n\n\n##------------------------------------------------------------------------------------------------------------------##\n# Logging Mechanism\nlog_entries = []  # Stores logs before writing to GCS\n\ndef log_event(event_type, message, table=None):\n    \"\"\"Log an event and store it in the log list\"\"\"\n    log_entry = {\n        \"timestamp\": datetime.datetime.now().isoformat(),\n        \"event_type\": event_type,\n        \"message\": message,\n        \"table\": table\n    }\n    log_entries.append(log_entry)\n    print(f\"[{log_entry['timestamp']}] {event_type} - {message}\")  # Print for visibility\n    \ndef save_logs_to_gcs():\n    \"\"\"Save logs to a JSON file and upload to GCS\"\"\"\n    log_filename = f\"pipeline_log_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}.json\"\n    log_filepath = f\"temp/pipeline_logs/{log_filename}\"  \n    \n    json_data = json.dumps(log_entries, indent=4)\n\n    # Get GCS bucket\n    bucket = storage_client.bucket(GCS_BUCKET)\n    blob = bucket.blob(log_filepath)\n    \n    # Upload JSON data as a file\n    blob.upload_from_string(json_data, content_type=\"application/json\")\n\n    print(f\"\u2705 Logs successfully saved to GCS at gs://{GCS_BUCKET}/{log_filepath}\")\n\ndef save_logs_to_bigquery():\n    \"\"\"Save logs to BigQuery\"\"\"\n    if log_entries:\n        log_df = spark.createDataFrame(log_entries)\n        log_df.write.format(\"bigquery\") \\\n            .option(\"table\", BQ_LOG_TABLE) \\\n            .option(\"temporaryGcsBucket\", BQ_TEMP_PATH) \\\n            .mode(\"append\") \\\n            .save()\n        print(\"\u2705 Logs stored in BigQuery for future analysis\")\n        \n    \n##------------------------------------------------------------------------------------------------------------------##\n\n# Function to Move Existing Files to Archive\ndef move_existing_files_to_archive(table):\n    blobs = list(storage_client.bucket(GCS_BUCKET).list_blobs(prefix=f\"landing/{HOSPITAL_NAME}/{table}/\"))\n    existing_files = [blob.name for blob in blobs if blob.name.endswith(\".json\")]\n\n    if not existing_files:\n        log_event(\"INFO\", f\"No existing files for table {table}\")\n        return\n\n    for file in existing_files:\n        source_blob = storage_client.bucket(GCS_BUCKET).blob(file)\n\n        # Extract Date from File Name (patients_07032026.json)\n        # file.split(\"_\")[-1] -- 07032026.json\n        # file.split(\"_\")[-1].split(\".\")[0] -- 07032026\n        date_part = file.split(\"_\")[-1].split(\".\")[0]\n        year, month, day = date_part[-4:], date_part[2:4], date_part[:2]\n\n        # Move to Archive\n        archive_path = f\"landing/{HOSPITAL_NAME}/archive/{table}/{year}/{month}/{day}/{file.split('/')[-1]}\"\n        destination_blob = storage_client.bucket(GCS_BUCKET).blob(archive_path)\n\n        # Copy file to archive and delete original\n        storage_client.bucket(GCS_BUCKET).copy_blob(source_blob, storage_client.bucket(GCS_BUCKET), destination_blob.name)\n        source_blob.delete()\n\n        log_event(\"INFO\", f\"Moved {file} to {archive_path}\", table=table)\n        \n##------------------------------------------------------------------------------------------------------------------##\n\n# Function to Get Latest Watermark from BigQuery Audit Table\ndef get_latest_watermark(table_name):\n    query = f\"\"\"\n        SELECT MAX(load_timestamp) AS latest_timestamp\n        FROM `{BQ_AUDIT_TABLE}`\n        WHERE tablename = '{table_name}' and data_source = \"hospital_a_db\"\n    \"\"\"\n    query_job = bq_client.query(query)\n    result = query_job.result()\n    for row in result:\n        return row.latest_timestamp if row.latest_timestamp else \"1900-01-01 00:00:00\"\n    return \"1900-01-01 00:00:00\"        \n        \n##------------------------------------------------------------------------------------------------------------------##\n\n# Function to Extract Data from MySQL and Save to GCS\ndef extract_and_save_to_landing(table, load_type, watermark_col):\n    try:\n        last_watermark = get_latest_watermark(table) if load_type.lower() == \"incremental\" else None\n        log_event(\"INFO\", f\"Latest watermark for {table}: {last_watermark}\", table=table)\n\n        query = f\"(SELECT * FROM {table}) AS t\" if load_type.lower() == \"full\" else \\\n                f\"(SELECT * FROM {table} WHERE {watermark_col} > '{last_watermark}') AS t\"\n\n        df = (spark.read.format(\"jdbc\")\n                .option(\"url\", MYSQL_CONFIG[\"url\"])\n                .option(\"user\", MYSQL_CONFIG[\"user\"])\n                .option(\"password\", MYSQL_CONFIG[\"password\"])\n                .option(\"driver\", MYSQL_CONFIG[\"driver\"])\n                .option(\"dbtable\", query)\n                .load())\n\n        log_event(\"SUCCESS\", f\"\u2705 Successfully extracted data from {table}\", table=table)\n\n        today = datetime.datetime.today().strftime('%d%m%Y')\n        JSON_FILE_PATH = f\"landing/{HOSPITAL_NAME}/{table}/{table}_{today}.json\"\n\n        bucket = storage_client.bucket(GCS_BUCKET)\n        blob = bucket.blob(JSON_FILE_PATH)\n        blob.upload_from_string(df.toPandas().to_json(orient=\"records\", lines=True), content_type=\"application/json\")\n\n        log_event(\"SUCCESS\", f\"\u2705 JSON file successfully written to gs://{GCS_BUCKET}/{JSON_FILE_PATH}\", table=table)\n        \n        # Insert Audit Entry\n        audit_df = spark.createDataFrame([\n            (\"hospital_a_db\", table, load_type, df.count(), datetime.datetime.now(), \"SUCCESS\")], \n            [\"data_source\", \"tablename\", \"load_type\", \"record_count\", \"load_timestamp\", \"status\"])\n\n        (audit_df.write.format(\"bigquery\")\n            .option(\"table\", BQ_AUDIT_TABLE)\n            .option(\"temporaryGcsBucket\", GCS_BUCKET)\n            .mode(\"append\")\n            .save())\n\n        log_event(\"SUCCESS\", f\"\u2705 Audit log updated for {table}\", table=table)\n\n    except Exception as e:\n        log_event(\"ERROR\", f\"Error processing {table}: {str(e)}\", table=table)\n    \n    \n##------------------------------------------------------------------------------------------------------------------##\n\n# Function to Read Config File from GCS\ndef read_config_file():\n    df = spark.read.csv(CONFIG_FILE_PATH, header=True)\n    log_event(\"INFO\", \"\u2705 Successfully read the config file\")\n    return df\n\n# read config file\nconfig_df = read_config_file()\n#config_df.show()\n\n\nfor row in config_df.collect():\n    if row[\"is_active\"]==\"1\" and row[\"datasource\"]==\"hospital_a_db\":\n        db,src,table,load_type,watermark,_,targetpath = row\n        move_existing_files_to_archive(table)\n        extract_and_save_to_landing(table,load_type,watermark)\n        \nsave_logs_to_gcs()\nsave_logs_to_bigquery()"}, {"cell_type": "code", "execution_count": null, "id": "dfed83dc-12c8-4a05-bf15-853f92de085c", "metadata": {}, "outputs": [], "source": ""}], "metadata": {"kernelspec": {"display_name": "PySpark", "language": "python", "name": "pyspark"}, "language_info": {"codemirror_mode": {"name": "ipython", "version": 3}, "file_extension": ".py", "mimetype": "text/x-python", "name": "python", "nbconvert_exporter": "python", "pygments_lexer": "ipython3", "version": "3.8.15"}}, "nbformat": 4, "nbformat_minor": 5}
+from google.cloud import storage, bigquery
+import pandas as pd
+from pyspark.sql import SparkSession
+import datetime
+import json
+
+# Initialize GCS & BigQuery Clients
+storage_client = storage.Client()
+bq_client = bigquery.Client()
+
+#Initialize Spark Session
+spark = SparkSession.builder.appName("HospitalAMySQLToLanding").getOrCreate()
+
+#Google Cloud Storage (GCS) Configuration (Moving Data From MySQL tables to GCS Landing Path)
+GCS_BUCKET = "healthcare-bucket-07032026"
+HOSPITAL_NAME = "hospital-a"   #Create Folder in GCS Landing Folder
+LANDING_PATH = f"gs://{GCS_BUCKET}/landing/{HOSPITAL_NAME}"
+ARCHIVE_PATH = f"gs://{GCS_BUCKET}/landing/{HOSPITAL_NAME}/archive/"
+CONFIG_FILE_PATH = f"gs://{GCS_BUCKET}/configs/load_config.csv"
+
+#BigQuery Configuration
+BQ_PROJECT = "project-839560af-c436-4801-9dc"
+BQ_AUDIT_TABLE = f"{BQ_PROJECT}.temp_dataset.audit_log"
+BQ_LOG_TABLE = f"{BQ_PROJECT}.temp_dataset.pipeline_logs"
+BQ_TEMP_PATH = f"{GCS_BUCKET}/temp/"
+
+
+# MySQL Configuration
+MYSQL_CONFIG = {
+    "url": "jdbc:mysql://34.41.176.141:3306/hospital-a-db",
+    "driver": "com.mysql.cj.jdbc.Driver",
+    "user": "myuser",
+    "password": "Root@12345"
+}
+
+
+##------------------------------------------------------------------------------------------------------------------##
+# Logging Mechanism
+log_entries = []  # Stores logs before writing to GCS
+
+def log_event(event_type, message, table=None):
+    """Log an event and store it in the log list"""
+    log_entry = {
+        "timestamp": datetime.datetime.now().isoformat(),
+        "event_type": event_type,
+        "message": message,
+        "table": table
+    }
+    log_entries.append(log_entry)
+    print(f"[{log_entry['timestamp']}] {event_type} - {message}")  # Print for visibility
+    
+def save_logs_to_gcs():
+    """Save logs to a JSON file and upload to GCS"""
+    log_filename = f"pipeline_log_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}.json"
+    log_filepath = f"temp/pipeline_logs/{log_filename}"  
+    
+    json_data = json.dumps(log_entries, indent=4)
+
+    # Get GCS bucket
+    bucket = storage_client.bucket(GCS_BUCKET)
+    blob = bucket.blob(log_filepath)
+    
+    # Upload JSON data as a file
+    blob.upload_from_string(json_data, content_type="application/json")
+
+    print(f"✅ Logs successfully saved to GCS at gs://{GCS_BUCKET}/{log_filepath}")
+
+def save_logs_to_bigquery():
+    """Save logs to BigQuery"""
+    if log_entries:
+        log_df = spark.createDataFrame(log_entries)
+        log_df.write.format("bigquery") \
+            .option("table", BQ_LOG_TABLE) \
+            .option("temporaryGcsBucket", BQ_TEMP_PATH) \
+            .mode("append") \
+            .save()
+        print("✅ Logs stored in BigQuery for future analysis")
+        
+    
+##------------------------------------------------------------------------------------------------------------------##
+
+# Function to Move Existing Files to Archive
+def move_existing_files_to_archive(table):
+    blobs = list(storage_client.bucket(GCS_BUCKET).list_blobs(prefix=f"landing/{HOSPITAL_NAME}/{table}/"))
+    existing_files = [blob.name for blob in blobs if blob.name.endswith(".json")]
+
+    if not existing_files:
+        log_event("INFO", f"No existing files for table {table}")
+        return
+
+    for file in existing_files:
+        source_blob = storage_client.bucket(GCS_BUCKET).blob(file)
+
+        # Extract Date from File Name (patients_07032026.json)
+        # file.split("_")[-1] -- 07032026.json
+        # file.split("_")[-1].split(".")[0] -- 07032026
+        date_part = file.split("_")[-1].split(".")[0]
+        year, month, day = date_part[-4:], date_part[2:4], date_part[:2]
+
+        # Move to Archive
+        archive_path = f"landing/{HOSPITAL_NAME}/archive/{table}/{year}/{month}/{day}/{file.split('/')[-1]}"
+        destination_blob = storage_client.bucket(GCS_BUCKET).blob(archive_path)
+
+        # Copy file to archive and delete original
+        storage_client.bucket(GCS_BUCKET).copy_blob(source_blob, storage_client.bucket(GCS_BUCKET), destination_blob.name)
+        source_blob.delete()
+
+        log_event("INFO", f"Moved {file} to {archive_path}", table=table)
+        
+##------------------------------------------------------------------------------------------------------------------##
+
+# Function to Get Latest Watermark from BigQuery Audit Table
+def get_latest_watermark(table_name):
+    query = f"""
+        SELECT MAX(load_timestamp) AS latest_timestamp
+        FROM `{BQ_AUDIT_TABLE}`
+        WHERE tablename = '{table_name}' and data_source = "hospital_a_db"
+    """
+    query_job = bq_client.query(query)
+    result = query_job.result()
+    for row in result:
+        return row.latest_timestamp if row.latest_timestamp else "1900-01-01 00:00:00"
+    return "1900-01-01 00:00:00"        
+        
+##------------------------------------------------------------------------------------------------------------------##
+
+# Function to Extract Data from MySQL and Save to GCS
+def extract_and_save_to_landing(table, load_type, watermark_col):
+    try:
+        last_watermark = get_latest_watermark(table) if load_type.lower() == "incremental" else None
+        log_event("INFO", f"Latest watermark for {table}: {last_watermark}", table=table)
+
+        query = f"(SELECT * FROM {table}) AS t" if load_type.lower() == "full" else \
+                f"(SELECT * FROM {table} WHERE {watermark_col} > '{last_watermark}') AS t"
+
+        df = (spark.read.format("jdbc")
+                .option("url", MYSQL_CONFIG["url"])
+                .option("user", MYSQL_CONFIG["user"])
+                .option("password", MYSQL_CONFIG["password"])
+                .option("driver", MYSQL_CONFIG["driver"])
+                .option("dbtable", query)
+                .load())
+
+        log_event("SUCCESS", f"✅ Successfully extracted data from {table}", table=table)
+
+        today = datetime.datetime.today().strftime('%d%m%Y')
+        JSON_FILE_PATH = f"landing/{HOSPITAL_NAME}/{table}/{table}_{today}.json"
+
+        bucket = storage_client.bucket(GCS_BUCKET)
+        blob = bucket.blob(JSON_FILE_PATH)
+        blob.upload_from_string(df.toPandas().to_json(orient="records", lines=True), content_type="application/json")
+
+        log_event("SUCCESS", f"✅ JSON file successfully written to gs://{GCS_BUCKET}/{JSON_FILE_PATH}", table=table)
+        
+        # Insert Audit Entry
+        audit_df = spark.createDataFrame([
+            ("hospital_a_db", table, load_type, df.count(), datetime.datetime.now(), "SUCCESS")], 
+            ["data_source", "tablename", "load_type", "record_count", "load_timestamp", "status"])
+
+        (audit_df.write.format("bigquery")
+            .option("table", BQ_AUDIT_TABLE)
+            .option("temporaryGcsBucket", GCS_BUCKET)
+            .mode("append")
+            .save())
+
+        log_event("SUCCESS", f"✅ Audit log updated for {table}", table=table)
+
+    except Exception as e:
+        log_event("ERROR", f"Error processing {table}: {str(e)}", table=table)
+    
+    
+##------------------------------------------------------------------------------------------------------------------##
+
+# Function to Read Config File from GCS
+def read_config_file():
+    df = spark.read.csv(CONFIG_FILE_PATH, header=True)
+    log_event("INFO", "✅ Successfully read the config file")
+    return df
+
+# read config file
+config_df = read_config_file()
+#config_df.show()
+
+
+for row in config_df.collect():
+    if row["is_active"]=="1" and row["datasource"]=="hospital_a_db":
+        db,src,table,load_type,watermark,_,targetpath = row
+        move_existing_files_to_archive(table)
+        extract_and_save_to_landing(table,load_type,watermark)
+        
+save_logs_to_gcs()
+save_logs_to_bigquery()
